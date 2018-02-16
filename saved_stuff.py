@@ -85,3 +85,4 @@ def f(seed, model, sigma, environment, reward):
     #t4=time.time()
     #print((t3-t2)*100/(t4-t1))
     return -value[0]
+

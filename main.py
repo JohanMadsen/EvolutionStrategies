@@ -47,9 +47,9 @@ test_loader = torch.utils.data.DataLoader(
 
 torch.manual_seed(1000)
 
-N, D_in, H, D_out = 64, 1*28*28, 100, 10
+N, D_in, H, D_out = 64, 28*28, 100, 10
 model = torch.nn.Sequential(
-    torch.nn.BatchNorm1d(D_in),
+    torch.nn.BatchNorm1d(D_in),#(allready normalized by the loader)
     torch.nn.Linear(D_in, H),
     torch.nn.BatchNorm1d(H),
     torch.nn.ReLU(),
@@ -59,25 +59,29 @@ model = torch.nn.Sequential(
 
 random.seed(1000)
 num_processes = 4
-n = 8
-sigma=1e-3
-learning_rate = 1e-3
-reward=torch.nn.CrossEntropyLoss()
+n = 20
+sigma = 1e-3
+learning_rate = 1e-2
+reward = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 if __name__ == "__main__":
     with Pool(num_processes) as p:
         for t in range(100):
             if t%1==0:
                 value=0
+                value2=0
                 sum=0
                 for batch_idx, (data, target) in enumerate(train_loader):
                     data, target = Variable(data).resize(data.size()[0],D_in), Variable(target)
                     output = model(data)
                     values,indices=output.max(1)
+                    value2+=reward(output,target)
                     sum+=target.data.size()[0]
                     for i in range(target.data.size()[0]):
                         if(indices.data[i]!=target.data[i]):
                             value+=1
-                print("Iteration:",t,"Loss:",value/sum)
+            print("Iteration:",t,"Loss:",value2.data.numpy(),"Procent wrong:",value/sum)
+            value2.backward()
             seeds = random.sample(range(1000000), n)
             par_f = partial(es.f, model=model, sigma=sigma, environment=train_loader, reward=reward)
             result = p.map(par_f, seeds)
@@ -89,6 +93,7 @@ if __name__ == "__main__":
                 if f_rank_values[count]<=0:
                     f_rank_values[count]=-n/4+3/2
                 count=count+1
+
             for parameter in model.parameters():
                 for i in range(n):
                     torch.manual_seed(seeds[i])
@@ -106,6 +111,8 @@ if __name__ == "__main__":
                     else:
                         torch.nn.init.normal(s1, 0, sigma)
                         s += s1*f_rank_values[i]
-                parameter.data += (learning_rate/(n*sigma))*s
-
-
+                #Normal gradint descent
+                #parameter.data += (learning_rate/(n*sigma))*s
+                #ADAM optimizer
+                parameter.grad=-(1/(n*sigma))*Variable(s)
+            optimizer.step()
