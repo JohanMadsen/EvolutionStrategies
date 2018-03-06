@@ -6,9 +6,7 @@ from torch.autograd import Variable
 from torchvision import datasets, transforms
 from scipy.stats import rankdata
 import argparse
-import es as es
 import copy
-import time
 
 
 #SETUP MNIST
@@ -46,33 +44,68 @@ test_loader = torch.utils.data.DataLoader(
 
 
 
-torch.manual_seed(1000)
 
-N, D_in, H, D_out = 64, 28*28, 100, 10
-model = torch.nn.Sequential(
-    torch.nn.BatchNorm1d(D_in),#(allready normalized by the loader)
-    torch.nn.Linear(D_in, H),
-    torch.nn.BatchNorm1d(H),
-    torch.nn.ReLU(),
-    torch.nn.BatchNorm1d(H),
-    torch.nn.Linear(H, D_out),
-)
-safe_mutation=1
+
+
+def f(mutation, data,target):
+    reward = torch.nn.CrossEntropyLoss()
+    copyModel = copy.deepcopy(model)
+    count=0
+    for parameter in copyModel.parameters():
+        s = mutation[count]
+        parameter.data += s
+        count +=1
+    output = copyModel(data)
+    value = reward(output, target).data.numpy()
+    return -value[0]
+
+
+#Settings
+safe_mutation=0
+adam=0
+batchnorm=0
 random.seed(1000)
-num_processes = 4
-n = 20
-sigma = 1e-3
-learning_rate = 1e-3
+torch.manual_seed(1000)
+num_processes = 2
+n = 24
+num_epoch=100
+sigma = 1e-3  #1e-3 without safe mutations
+learning_rate = 1e-3 #1e-3 without safe mutations
 reward = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+#Models
+N, D_in, H, D_out = 64, 28*28, 100, 10
+
+if batchnorm==1:
+    model = torch.nn.Sequential(
+        torch.nn.BatchNorm1d(D_in),
+        torch.nn.Linear(D_in, H),
+        torch.nn.BatchNorm1d(H),
+        torch.nn.ReLU(),
+        torch.nn.BatchNorm1d(H),
+        torch.nn.Linear(H, D_out),
+    )
+else:
+    model = torch.nn.Sequential(
+        torch.nn.Linear(D_in, H),
+        torch.nn.ReLU(),
+        torch.nn.Linear(H, D_out),
+    )
+
+
+
+model.share_memory()
+
+if adam==1:
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 if __name__ == "__main__":
     with Pool(num_processes) as p:
-        for t in range(100):
+        for t in range(num_epoch+1):
             if t%1==0:
                 value=0
                 value2=0
                 sum=0
-                for batch_idx, (data, target) in enumerate(train_loader):
+                for batch_idx, (data, target) in enumerate(test_loader):
                     data, target = Variable(data).resize(data.size()[0],D_in), Variable(target)
                     output = model(data)
                     values,indices=output.max(1)
@@ -81,92 +114,120 @@ if __name__ == "__main__":
                     for i in range(target.data.size()[0]):
                         if(indices.data[i]!=target.data[i]):
                             value+=1
-                print("Iteration:",t,"Loss:",value2.data.numpy(),"Procent wrong:",value/sum)
-
-            seeds = random.sample(range(1000000), n)
-            par_f = partial(es.f, model=model, sigma=sigma, environment=train_loader, reward=reward, safe_mutation=safe_mutation)
-            result = p.map(par_f, seeds)
-            f_values = rankdata(result)
-            f_rank_values = [0] * n
-            count=0
-            for value in f_values:
-                f_rank_values[count]=value-n/2
-                if f_rank_values[count]<=0:
-                    f_rank_values[count]=-n/4+3/2
-                count=count+1
-            if safe_mutation==1:
-                output_sum = Variable(torch.FloatTensor(10).zero_(), requires_grad=True)
-                output_gradients = []
-                for batch_idx, (data, target) in enumerate(train_loader):
+                print("On Test data:","Epoch:",t,"Loss:",value2.data.numpy(),"Procent wrong:",value/sum)
+            if t==num_epoch:
+                break
+            for batch_idx, (data, target) in enumerate(train_loader):
+                data, target = Variable(data).resize(data.size()[0], D_in), Variable(target)
+                seeds = random.sample(range(1000000), n)
+                mutations=[]
+                if safe_mutation==1:#SUM
+                    output_sum = Variable(torch.FloatTensor(10).zero_(), requires_grad=True)
+                    output_gradients = []
+                    scale = []
                     batch_size = data.size()[0]
-                    data, target = Variable(data).resize(batch_size, 28 * 28), Variable(target)
                     output = model(data)
+                    value=reward(output,target)
                     for j in range(batch_size):
                         output_sum.data += output.data[j, :]
-                for k in range(10):
-                    output[1, k].data += (output_sum[k].data - output[1, k].data)
-                    model.zero_grad()
-                    output[1, k].backward(retain_graph=True)
-                    output_gradient = []
-                    for parameter in model.parameters():
-                        output_gradient.append(copy.deepcopy(parameter.grad))
-                    output_gradients.append(output_gradient)
-                    model.zero_grad()
-                for k in range(10):
-                    count = 0
-                    for parameter in model.parameters():
-                        parameter.grad += output_gradients[k][count] ** 2
-                        count += 1
-                for parameter in model.parameters():
-                    parameter.grad = parameter.grad ** 0.5
-
-
-
-                for parameter in model.parameters():
+                    for k in range(10):
+                        output[1, k].data += (output_sum[k].data - output[1, k].data)
+                        model.zero_grad()
+                        output[1, k].backward(retain_graph=True)
+                        output_gradient = []
+                        for parameter in model.parameters():
+                            output_gradient.append(parameter.grad)
+                        output_gradients.append(output_gradient)
+                elif safe_mutation==2:
+                    output_gradients = []
+                    scale = []
+                    batch_size = data.size()[0]
+                    output = model(data)
+                    value=reward(output,target)
+                    for i in range(10):
+                        output_gradient = []
+                        for j in range(batch_size):
+                            model.zero_grad()
+                            output[j, i].backward(retain_graph=True)
+                            if j==0:
+                                for parameter in model.parameters():
+                                    output_gradient.append(parameter.grad.abs())
+                            else:
+                                count=0
+                                for parameter in model.parameters():
+                                    output_gradient[count]+=parameter.grad.abs()
+                                    count+=1
+                        count=0
+                        for parameter in model.parameters():
+                            output_gradient[count]=output_gradient[count]/batch_size
+                            count+=1
+                        output_gradients.append(output_gradient)
+                if safe_mutation>0:
+                    for k in range(10):
+                        if k == 0:
+                            count=0
+                            for parameter in model.parameters():
+                                scale.append(output_gradients[k][count] ** 2)
+                                count +=1
+                        else:
+                            count = 0
+                            for parameter in model.parameters():
+                                scale[count] += output_gradients[k][count] ** 2
+                                count +=1
+                    for i in range(len(scale)):
+                        scale[i] = scale[i] ** 0.5
+                        scale[i] *= (scale[i]>1e-1).type(torch.FloatTensor)
+                        scale[i] += (scale[i] == 0).type(torch.FloatTensor)
                     for i in range(n):
+                        mutation = []
                         torch.manual_seed(seeds[i])
-                        if i == 0:
+                        count=0
+                        for parameter in model.parameters():
                             if len(list(parameter.size())) == 1:
                                 s = torch.Tensor(list(parameter.size())[0])
-                                s1 = torch.Tensor(list(parameter.size())[0])
-                                torch.nn.init.normal(s, 0, sigma)
-                                s *= f_rank_values[i]
                             else:
                                 s = torch.Tensor(list(parameter.size())[0], list(parameter.size())[1])
-                                s1 = torch.Tensor(list(parameter.size())[0], list(parameter.size())[1])
-                                torch.nn.init.normal(s, 0, sigma)
-                                s *= f_rank_values[i]
-                        else:
-                            torch.nn.init.normal(s1, 0, sigma)
-                            s1=s1
-                            s += s1*f_rank_values[i]
-                    #Normal gradint descent
-
-                    parameter.data += (learning_rate/(n*sigma))*(s/parameter.grad.data)
-                    #ADAM optimizer
-                    #parameter.grad=-(1/(n*sigma))*(Variable(s)/parameter.grad)
-                #optimizer.step()
-
-            else:
-                for parameter in model.parameters():
+                            torch.nn.init.normal(s, 0, sigma)
+                            s=s/scale[count].data
+                            mutation.append(s)
+                            count+=1
+                        mutations.append(mutation)
+                else:
                     for i in range(n):
+                        mutation = []
                         torch.manual_seed(seeds[i])
-                        if i == 0:
+                        for parameter in model.parameters():
                             if len(list(parameter.size())) == 1:
                                 s = torch.Tensor(list(parameter.size())[0])
-                                s1 = torch.Tensor(list(parameter.size())[0])
-                                torch.nn.init.normal(s, 0, sigma)
-                                s *= f_rank_values[i]
                             else:
                                 s = torch.Tensor(list(parameter.size())[0], list(parameter.size())[1])
-                                s1 = torch.Tensor(list(parameter.size())[0], list(parameter.size())[1])
-                                torch.nn.init.normal(s, 0, sigma)
-                                s *= f_rank_values[i]
-                        else:
-                            torch.nn.init.normal(s1, 0, sigma)
-                            s += s1*f_rank_values[i]
-                    #Normal gradint descent
-                    parameter.data += (learning_rate/(n*sigma))*s
+                            torch.nn.init.normal(s, 0, sigma)
+                            mutation.append(s)
+                        mutations.append(mutation)
+                par_f = partial(f, data=data, target=target)
+                result = p.map(par_f, mutations)
+
+
+                f_values = rankdata(result)
+                f_rank_values = [0] * n
+                count=0
+                for value in f_values:
+                    f_rank_values[count]=value-n/2
+                    if f_rank_values[count]<=0:
+                        f_rank_values[count]=-n/4+3/2
+                    count+=1
+                count=0
+                for parameter in model.parameters():
+                    s=0
+                    for i in range(n):
+                        s1=mutations[i][count]
+                        s += s1 * f_rank_values[i]
+                    count +=1
+                    #Normal gradient descent
+                    if adam==0:
+                        parameter.data += (learning_rate/(n*sigma))*s
                     #ADAM optimizer
-                    #parameter.grad=-(1/(n*sigma))*Variable(s)
-                #optimizer.step()
+                    if adam==1:
+                        parameter.grad=-(1/(n*sigma))*Variable(s)
+                if adam==1:
+                    optimizer.step()
