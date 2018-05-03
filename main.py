@@ -7,7 +7,8 @@ from torchvision import datasets, transforms
 from scipy.stats import rankdata
 import argparse
 import copy
-
+import math
+import time
 
 #SETUP MNIST
 ##################################################
@@ -66,15 +67,15 @@ adam=0
 batchnorm=0
 random.seed(1000)
 torch.manual_seed(1000)
-num_processes = 2
-n = 24
-num_epoch=100
-sigma = 1e-3  #1e-3 without safe mutations
-learning_rate = 1e-3 #1e-3 without safe mutations
+num_processes = 1
+n = 120
+num_epoch=50
+sigma = 1e-4
+learning_rate = 1e-0
 reward = torch.nn.CrossEntropyLoss()
 
 #Models
-N, D_in, H, D_out = 64, 28*28, 100, 10
+N, D_in, H, D_out = 1000, 28*28, 100, 10
 
 if batchnorm==1:
     model = torch.nn.Sequential(
@@ -127,7 +128,6 @@ if __name__ == "__main__":
                     scale = []
                     batch_size = data.size()[0]
                     output = model(data)
-                    value=reward(output,target)
                     for j in range(batch_size):
                         output_sum.data += output.data[j, :]
                     for k in range(10):
@@ -143,7 +143,6 @@ if __name__ == "__main__":
                     scale = []
                     batch_size = data.size()[0]
                     output = model(data)
-                    value=reward(output,target)
                     for i in range(10):
                         output_gradient = []
                         for j in range(batch_size):
@@ -209,12 +208,16 @@ if __name__ == "__main__":
 
 
                 f_values = rankdata(result)
+                for i in range(len(f_values)):
+                    f_values[i] *= -1
+                    f_values[i] += n + 1
                 f_rank_values = [0] * n
                 count=0
+                fsum=0
                 for value in f_values:
-                    f_rank_values[count]=value-n/2
-                    if f_rank_values[count]<=0:
-                        f_rank_values[count]=-n/4+3/2
+                    fsum+=max(0.0,math.log(n/2+1)-math.log(value))
+                for value in f_values:
+                    f_rank_values[count]=(max(0.0,math.log(n/2+1)-math.log(value))/fsum)-1/n
                     count+=1
                 count=0
                 for parameter in model.parameters():
