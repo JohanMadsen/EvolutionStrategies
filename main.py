@@ -1,3 +1,5 @@
+#Importing Liberies
+##################################################
 import torch
 from torch.multiprocessing import Pool
 import random
@@ -8,11 +10,10 @@ from scipy.stats import rankdata
 import argparse
 import copy
 import math
-import time
+
 
 #SETUP MNIST
 ##################################################
-# Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
 parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                     help='input batch size for training (default: 64)')
@@ -47,7 +48,8 @@ test_loader = torch.utils.data.DataLoader(
 
 
 
-
+#The paralized function, that takes a mutations, applies that to the NN and then calculates a fitness for that mutation
+##################################################
 def f(mutation, data,target):
     reward = torch.nn.CrossEntropyLoss()
     copyModel = copy.deepcopy(model)
@@ -62,19 +64,21 @@ def f(mutation, data,target):
 
 
 #Settings
+##################################################
 safe_mutation=0
 adam=0
-batchnorm=0
+batchnorm=1
 random.seed(1000)
 torch.manual_seed(1000)
 num_processes = 1
 n = 120
 num_epoch=50
 sigma = 1e-4
-learning_rate = 1e-0
+learning_rate = 1
 reward = torch.nn.CrossEntropyLoss()
 
-#Models
+#Model
+##################################################
 N, D_in, H, D_out = 1000, 28*28, 100, 10
 
 if batchnorm==1:
@@ -86,6 +90,13 @@ if batchnorm==1:
         torch.nn.BatchNorm1d(H),
         torch.nn.Linear(H, D_out),
     )
+if batchnorm==2:
+    model = torch.nn.Sequential(
+        torch.nn.BatchNorm1d(D_in),
+        torch.nn.Linear(D_in, H),
+        torch.nn.ReLU(),
+        torch.nn.Linear(H, D_out),
+    )
 else:
     model = torch.nn.Sequential(
         torch.nn.Linear(D_in, H),
@@ -93,15 +104,17 @@ else:
         torch.nn.Linear(H, D_out),
     )
 
-
-
 model.share_memory()
+
 
 if adam==1:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+#The main function
+##################################################
 if __name__ == "__main__":
     with Pool(num_processes) as p:
-        for t in range(num_epoch+1):
+        for t in range(num_epoch+1): # After each Epoc write out how good the network is on test data
             if t%1==0:
                 value=0
                 value2=0
@@ -120,14 +133,16 @@ if __name__ == "__main__":
                 break
             for batch_idx, (data, target) in enumerate(train_loader):
                 data, target = Variable(data).resize(data.size()[0], D_in), Variable(target)
+                output = model(data)
+                score=reward(output,target).data.numpy()
+                score=-score[0]
                 seeds = random.sample(range(1000000), n)
                 mutations=[]
-                if safe_mutation==1:#SUM
+                if safe_mutation==1:# Calculates the safe mutation S_SUM
                     output_sum = Variable(torch.FloatTensor(10).zero_(), requires_grad=True)
                     output_gradients = []
                     scale = []
                     batch_size = data.size()[0]
-                    output = model(data)
                     for j in range(batch_size):
                         output_sum.data += output.data[j, :]
                     for k in range(10):
@@ -138,11 +153,10 @@ if __name__ == "__main__":
                         for parameter in model.parameters():
                             output_gradient.append(parameter.grad)
                         output_gradients.append(output_gradient)
-                elif safe_mutation==2:
+                elif safe_mutation==2:# Calculates the safe mutation S_ABS
                     output_gradients = []
                     scale = []
                     batch_size = data.size()[0]
-                    output = model(data)
                     for i in range(10):
                         output_gradient = []
                         for j in range(batch_size):
@@ -161,7 +175,7 @@ if __name__ == "__main__":
                             output_gradient[count]=output_gradient[count]/batch_size
                             count+=1
                         output_gradients.append(output_gradient)
-                if safe_mutation>0:
+                if safe_mutation>0:#Samples the mutations and applies the weight given by the "Safe mutation"
                     for k in range(10):
                         if k == 0:
                             count=0
@@ -191,7 +205,7 @@ if __name__ == "__main__":
                             mutation.append(s)
                             count+=1
                         mutations.append(mutation)
-                else:
+                else:#Samples the mutations without "Safe Mutations"
                     for i in range(n):
                         mutation = []
                         torch.manual_seed(seeds[i])
@@ -203,10 +217,11 @@ if __name__ == "__main__":
                             torch.nn.init.normal(s, 0, sigma)
                             mutation.append(s)
                         mutations.append(mutation)
-                par_f = partial(f, data=data, target=target)
-                result = p.map(par_f, mutations)
 
+                par_f = partial(f, data=data, target=target) #Makes a partial function so each mutation can be run on the same data
+                result = p.map(par_f, mutations) # Calls the paralized function with each mutation
 
+                #Calculates the rank transform of the fitness values
                 f_values = rankdata(result)
                 for i in range(len(f_values)):
                     f_values[i] *= -1
@@ -219,6 +234,8 @@ if __name__ == "__main__":
                 for value in f_values:
                     f_rank_values[count]=(max(0.0,math.log(n/2+1)-math.log(value))/fsum)-1/n
                     count+=1
+
+                #Estimates the gradiant from the fitness values and the mutations, and applies it to take one step
                 count=0
                 for parameter in model.parameters():
                     s=0

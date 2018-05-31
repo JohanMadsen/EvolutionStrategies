@@ -3,10 +3,7 @@
 from torch.multiprocessing import Pool
 import copy
 import random
-from collections import namedtuple
 from functools import partial
-import gym
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -16,21 +13,14 @@ import math
 from PIL import Image
 from scipy.stats import rankdata
 from torch.autograd import Variable
+import gym
 
-
-
-env = gym.make('CartPole-v0').unwrapped
-
-plt.ion()
 
 FloatTensor = torch.FloatTensor
 LongTensor = torch.LongTensor
 ByteTensor = torch.ByteTensor
 Tensor = FloatTensor
 
-
-Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward'))
 
 
 #Model
@@ -45,7 +35,7 @@ class DQN(nn.Module):
         self.bn2 = nn.BatchNorm2d(32)
         self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
         self.bn3 = nn.BatchNorm2d(32)
-        self.head = nn.Linear(448, 2)
+        self.head = nn.Linear(640, 12)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
@@ -55,46 +45,15 @@ class DQN(nn.Module):
 
 
 resize = T.Compose([T.ToPILImage(),
-                    T.Scale(40, interpolation=Image.CUBIC),
+                   T.Resize((56,64), interpolation=Image.CUBIC),
                     T.ToTensor()])
 
 
-
-
-#The folowing are functions to transform the pictures into input for the NN
-
-# This is based on the code from gym.
-screen_width = 600
-
-def get_cart_location(env):
-    world_width = env.x_threshold * 2
-    scale = screen_width / world_width
-    return int(env.state[0] * scale + screen_width / 2.0)  # MIDDLE OF CART
-
-
-def get_screen(env):
-    screen = env.render(mode='rgb_array').transpose(
-        (2, 0, 1))
-    # Strip off the top and bottom of the screen
-    screen = screen[:, 160:320]
-    view_width = 320
-    cart_location = get_cart_location(env)
-    if cart_location < view_width // 2:
-        slice_range = slice(view_width)
-    elif cart_location > (screen_width - view_width // 2):
-        slice_range = slice(-view_width, None)
-    else:
-        slice_range = slice(cart_location - view_width // 2,
-                            cart_location + view_width // 2)
-    # Strip off the edges, so that we have a square image centered on a cart
-    screen = screen[:, :, slice_range]
-    # Convert to float, rescare, convert to torch tensor
-    # (this doesn't require a copy)
-    screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
-    screen = torch.from_numpy(screen)
-    # Resize, and add a batch dimension (BCHW)
-    return resize(screen).unsqueeze(0).type(Tensor)
-
+#This is  to transform the pictures into input for the NN
+def get_screen(obs):
+    s=np.ascontiguousarray(obs, dtype=np.float32) / 255
+    s = torch.from_numpy(s)
+    return resize(s).unsqueeze(0).type(Tensor)
 
 
 
@@ -105,161 +64,160 @@ safe_mutation=0
 adam=0
 random.seed(1000)
 torch.manual_seed(1000)
-num_processes = 3
+num_processes = 1
 n = 120
 sigma = 1e-2
-learning_rate = 1e0
-
-GAMMA = 0.999
-EPS_START = 0.9
-EPS_END = 0.05
-EPS_DECAY = 200
+learning_rate = 1e-0
 
 model = DQN()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-episode_durations = []
 
-
-def plot_durations():
-    plt.figure(2)
-    plt.clf()
-    durations_t = torch.FloatTensor(episode_durations)
-    plt.title('Training...')
-    plt.xlabel('Iteration')
-    plt.ylabel('Duration')
-    plt.plot(durations_t.numpy())
-    if len(durations_t) >= 5:
-        means = durations_t.unfold(0, 5, 1).mean(1).view(-1)
-        means = torch.cat((torch.zeros(4), means))
-        plt.plot(means.numpy())
-    plt.pause(0.001)  # pause a bit so that plots are updated
 
 
 #The paralized function, that takes a mutations, applies that to the NN and then calculates a fitness for that mutation
 ##################################################
 def f(mutation):
-    env = gym.make('CartPole-v0').unwrapped
+    env = gym.make('SuperMarioBros-1-1-v0')
     copyModel = copy.deepcopy(model)
     count=0
     for parameter in copyModel.parameters():
         s = mutation[count]
         parameter.data += s
         count +=1
-    totalrounds = 0
-    for i in range(5):
-        env.reset()
-        last_screen = get_screen(env)
-        current_screen = get_screen(env)
-        state = current_screen - last_screen
-
-        done=False
-        while(not done):
-            # Select and perform an action
-            action = copyModel(
-                Variable(state, volatile=True).type(FloatTensor)).data.max(1)[1].view(1, 1)
-            _, reward, done, _ = env.step(action[0, 0])
-            #Observe new state
-            last_screen = current_screen
-            current_screen = get_screen(env)
-            if not done:
-                next_state = current_screen - last_screen
+    observation = torch.from_numpy(env.reset())
+    last_screen = get_screen(observation)
+    current_screen = last_screen
+    state = current_screen - last_screen
+    action = np.random.randint(2, size=6)
+    done = False
+    notmoving=0
+    while not done:
+        result = copyModel(Variable(state, requires_grad=True).type(FloatTensor))
+        for i in range(6):
+            if result[0, i * 2].data.numpy()[0] > result[0, i * 2 + 1].data.numpy()[0]:
+                action[i] = 1
             else:
-                next_state = None
-            # Move to the next state
-            state = next_state
-            totalrounds+=1
-            if done:
-                if i<4:
-                    break
-                else:
-                    env.render(close=True)
-                    env.close()
-                    plt.ioff()
-                    plt.show()
-                    plt.close()
-                    return totalrounds
+                action[i] = 0
 
+        observation, reward, done, info = env.step(action)  # feedback from environment
+        last_screen = current_screen
+        current_screen = get_screen(observation)
+        if not done:
+            next_state = current_screen - last_screen
+        else:
+            next_state = None
+        state = next_state
+        if state is None:
+            break
+        if info.get("time")<390 and info.get("distance")<50:
+            break
+        if info.get("time")<5:
+            break
+        if torch.sum(state)==0.0:
+            notmoving+=1
+        else:
+            notmoving=0
+        if notmoving>100:
+            break
+    env.close()
+    return info.get("distance")
+
+# A function to do a rollout of the enviroment to see how good this iteration of the NN is
 def rollout():
-    w=0
-    z=20
-    for i in range(z):
-        env.reset()
-        last_screen = get_screen(env)
-        current_screen = get_screen(env)
-        state = current_screen - last_screen
-        actions=list()
-        while True:
-            # Select and perform an action
-            result=model(
-                Variable(state, volatile=True).type(FloatTensor))
-            action = result.data.max(1)[1].view(1, 1)
-            actions.append(result)
-            _, reward, done, _ = env.step(action[0, 0])
-            # Observe new state
-            last_screen = current_screen
-            current_screen = get_screen(env)
-            if not done:
-                next_state = current_screen - last_screen
+    env = gym.make('SuperMarioBros-1-1-v0')
+    observation = torch.from_numpy(env.reset())
+    last_screen = get_screen(observation)
+    current_screen = last_screen
+    state = current_screen - last_screen
+    action = np.random.randint(2, size=6)
+    done = False
+    notmoving=0
+    while not done:
+        result = model(Variable(state, requires_grad=True).type(FloatTensor))
+        for i in range(6):
+            if result[0, i * 2].data.numpy()[0] > result[0, i * 2 + 1].data.numpy()[0]:
+                action[i] = 1
             else:
-                next_state = None
-            # Move to the next state
-            state = next_state
-            w+=1
-            if done:
-                if i==(z-1):
-                    episode_durations.append(w/z)
-                    print(w/z)
-                    plot_durations()
-                break
+                action[i] = 0
+
+        observation, reward, done, info = env.step(action)  # feedback from environment
+        last_screen = current_screen
+        current_screen = get_screen(observation)
+        if not done:
+            next_state = current_screen - last_screen
+        else:
+            next_state = None
+        state = next_state
+        if state is None:
+            break
+        if info.get("time")<390 and info.get("distance")<50:
+            break
+        if info.get("time")<5:
+            break
+        if torch.sum(state)==0.0:
+            notmoving+=1
+        else:
+            notmoving=0
+        if notmoving>100:
+            break
+    print(info.get("distance"))
+    env.close()
+
 
 
 def es():#MY Evolutions strategies function
     seeds = random.sample(range(1000000), n)
     mutations = []
     if safe_mutation == 1:  # Calculates the safe mutation S_SUM
+        env = gym.make('SuperMarioBros-1-1-v0')
         output_gradients = []
-        w = 0
-        ##rollout #####
-        for i in range(5):
-            env.reset()
-            last_screen = get_screen(env)
-            current_screen = get_screen(env)
-            state = current_screen - last_screen
-            output_sum = Variable(torch.FloatTensor(2).zero_(), requires_grad=True)
-            while True:
-                # Select and perform an action
-                result = model(
-                    Variable(state, volatile=True).type(FloatTensor))
-                result1 = model(
-                    Variable(state, requires_grad=True).type(FloatTensor))
-
-                action = result.data.max(1)[1].view(1, 1)
-                output_sum.data += result1.data
-                _, reward, done, _ = env.step(action[0, 0])
-                # Observe new state
-                last_screen = current_screen
-                current_screen = get_screen(env)
-                if not done:
-                    next_state = current_screen - last_screen
+        observation = torch.from_numpy(env.reset())
+        last_screen = get_screen(observation)
+        current_screen = last_screen
+        state = current_screen - last_screen
+        action = np.random.randint(2, size=6)
+        output_sum = Variable(torch.FloatTensor(12).zero_(), requires_grad=True)
+        done = False
+        notmoving = 0
+        while not done:
+            result = model(Variable(state, requires_grad=True).type(FloatTensor))
+            output_sum.data += result.data
+            for i in range(6):
+                if result[0, i * 2].data.numpy()[0] > result[0, i * 2 + 1].data.numpy()[0]:
+                    action[i] = 1
                 else:
-                    next_state = None
-                # Move to the next state
-                state = next_state
-                w+=1
-                if done:
-                    break
-        result1.data += (output_sum.data - result1.data)
+                    action[i] = 0
+
+            observation, reward, done, info = env.step(action)  # feedback from environment
+            last_screen = current_screen
+            current_screen = get_screen(observation)
+            if not done:
+                next_state = current_screen - last_screen
+            else:
+                next_state = None
+            state = next_state
+            if state is None:
+                break
+            if info.get("time") < 390 and info.get("distance") < 50:
+                break
+            if info.get("time") < 5:
+                break
+            if torch.sum(state) == 0.0:
+                notmoving += 1
+            else:
+                notmoving = 0
+            if notmoving > 100:
+                break
+        env.close()
+        result.data += (output_sum.data - result.data)
         for k in range(2):
             model.zero_grad()
-            result1[0,k].backward(retain_graph=True)
+            result[0,k].backward(retain_graph=True)
             output_gradient = []
             for parameter in model.parameters():
                 output_gradient.append(parameter.grad)
             output_gradients.append(output_gradient)
-
-
-
     if safe_mutation > 0:#Samples the mutations and applies the weight given by the "Safe mutation"
         scale=[]
         for k in range(2):
@@ -346,18 +304,12 @@ def es():#MY Evolutions strategies function
             parameter.grad = -(1 / (n * sigma)) * Variable(s)
     if adam == 1:
         optimizer.step()
+    rollout()
 
-
-
-num_iterations = 1000
+num_episodes = 1000
 with Pool(num_processes) as p:
     rollout()
-    for i_iteration in range(num_iterations):
-        print("Iteration:",i_iteration+1)
+    for i_episode in range(num_episodes):
+        print(i_episode+1)
         es()
-        rollout()
 print('Complete')
-env.render(close=True)
-env.close()
-plt.ioff()
-plt.show()
