@@ -60,14 +60,14 @@ def get_screen(obs):
 
 #Settings
 ##################################################
-safe_mutation=0
+safe_mutation=1
 adam=0
 random.seed(1000)
 torch.manual_seed(1000)
 num_processes = 1
-n = 120
+n = 10
 sigma = 1e-2
-learning_rate = 1e-0
+learning_rate = 1e-1
 
 model = DQN()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -161,14 +161,17 @@ def rollout():
             notmoving=0
         if notmoving>100:
             break
-    print(info.get("distance"))
+
     env.close()
+    return info.get("distance")
 
 
 
 def es():#MY Evolutions strategies function
     seeds = random.sample(range(1000000), n)
     mutations = []
+    lastit=rollout()
+    print(lastit)
     if safe_mutation == 1:  # Calculates the safe mutation S_SUM
         env = gym.make('SuperMarioBros-1-1-v0')
         output_gradients = []
@@ -276,6 +279,10 @@ def es():#MY Evolutions strategies function
 
     # Calculates the rank transform of the fitness values
     f_values = rankdata(result)
+    #number = sum(r > lastit for r in result)
+    #if number==0:
+        #number=n/2
+    number=n/2
     f_rank_values = [0] * n
     fsum = 0
     for i in range(len(f_values)):
@@ -283,9 +290,9 @@ def es():#MY Evolutions strategies function
         f_values[i]+=n+1
     count=0
     for value in f_values:
-        fsum += max(0.0, math.log(n / 2 + 1) - math.log(value))
+        fsum += max(0.0, math.log(number + 1) - math.log(value))
     for value in f_values:
-        f_rank_values[count] = (max(0.0, math.log(n / 2 + 1) - math.log(value))/fsum) - 1 / n
+        f_rank_values[count] = (max(0.0, math.log(number + 1) - math.log(value))/fsum) - 1 / n
         count += 1
 
     # Estimates the gradiant from the fitness values and the mutations, and applies it to take one step
@@ -304,12 +311,13 @@ def es():#MY Evolutions strategies function
             parameter.grad = -(1 / (n * sigma)) * Variable(s)
     if adam == 1:
         optimizer.step()
-    rollout()
 
-num_episodes = 1000
+num_iterations = 100
 with Pool(num_processes) as p:
-    rollout()
-    for i_episode in range(num_episodes):
-        print(i_episode+1)
+    print("Random start:")
+    for i_iteration in range(num_iterations):
         es()
+        print("Iteration:", i_iteration + 1)
+
+
 print('Complete')

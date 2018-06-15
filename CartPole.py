@@ -106,9 +106,9 @@ adam=0
 random.seed(1000)
 torch.manual_seed(1000)
 num_processes = 3
-n = 120
+n = 10
 sigma = 1e-2
-learning_rate = 1e0
+learning_rate = 1e-2
 
 GAMMA = 0.999
 EPS_START = 0.9
@@ -147,7 +147,7 @@ def f(mutation):
         parameter.data += s
         count +=1
     totalrounds = 0
-    for i in range(5):
+    for i in range(20):
         env.reset()
         last_screen = get_screen(env)
         current_screen = get_screen(env)
@@ -170,13 +170,10 @@ def f(mutation):
             state = next_state
             totalrounds+=1
             if done:
-                if i<4:
+                if i<19:
                     break
                 else:
-                    env.render(close=True)
                     env.close()
-                    plt.ioff()
-                    plt.show()
                     plt.close()
                     return totalrounds
 
@@ -209,19 +206,21 @@ def rollout():
             if done:
                 if i==(z-1):
                     episode_durations.append(w/z)
-                    print(w/z)
                     plot_durations()
+                    return w/z
                 break
 
 
 def es():#MY Evolutions strategies function
     seeds = random.sample(range(1000000), n)
     mutations = []
+    lastit=rollout()
+    print(lastit)
     if safe_mutation == 1:  # Calculates the safe mutation S_SUM
         output_gradients = []
         w = 0
         ##rollout #####
-        for i in range(5):
+        for i in range(20):
             env.reset()
             last_screen = get_screen(env)
             current_screen = get_screen(env)
@@ -318,6 +317,10 @@ def es():#MY Evolutions strategies function
 
     # Calculates the rank transform of the fitness values
     f_values = rankdata(result)
+    number=sum(r >= lastit for r in result)
+    if number==0 or number==n:
+        number=n/2
+    #number=n/2
     f_rank_values = [0] * n
     fsum = 0
     for i in range(len(f_values)):
@@ -325,9 +328,11 @@ def es():#MY Evolutions strategies function
         f_values[i]+=n+1
     count=0
     for value in f_values:
-        fsum += max(0.0, math.log(n / 2 + 1) - math.log(value))
+        fsum += max(0.0, math.log(number + 1) - math.log(value))
+    if fsum==0:
+        fsum=1
     for value in f_values:
-        f_rank_values[count] = (max(0.0, math.log(n / 2 + 1) - math.log(value))/fsum) - 1 / n
+        f_rank_values[count] = (max(0.0, math.log(number + 1) - math.log(value))/fsum) - 1 / n
         count += 1
 
     # Estimates the gradiant from the fitness values and the mutations, and applies it to take one step
@@ -351,11 +356,11 @@ def es():#MY Evolutions strategies function
 
 num_iterations = 1000
 with Pool(num_processes) as p:
-    rollout()
+    print("Random start:")
     for i_iteration in range(num_iterations):
         print("Iteration:",i_iteration+1)
         es()
-        rollout()
+
 print('Complete')
 env.render(close=True)
 env.close()

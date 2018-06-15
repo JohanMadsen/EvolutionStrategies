@@ -7,6 +7,7 @@ from functools import partial
 from torch.autograd import Variable
 from torchvision import datasets, transforms
 from scipy.stats import rankdata
+import numpy as np
 import argparse
 import copy
 import math
@@ -66,8 +67,8 @@ def f(mutation, data,target):
 #Settings
 ##################################################
 safe_mutation=0
-adam=0
-batchnorm=1
+adam=1
+batchnorm=0
 random.seed(1000)
 torch.manual_seed(1000)
 num_processes = 1
@@ -135,7 +136,7 @@ if __name__ == "__main__":
                 data, target = Variable(data).resize(data.size()[0], D_in), Variable(target)
                 output = model(data)
                 score=reward(output,target).data.numpy()
-                score=-score[0]
+                lastit=-score[0]
                 seeds = random.sample(range(1000000), n)
                 mutations=[]
                 if safe_mutation==1:# Calculates the safe mutation S_SUM
@@ -220,9 +221,12 @@ if __name__ == "__main__":
 
                 par_f = partial(f, data=data, target=target) #Makes a partial function so each mutation can be run on the same data
                 result = p.map(par_f, mutations) # Calls the paralized function with each mutation
-
                 #Calculates the rank transform of the fitness values
                 f_values = rankdata(result)
+                number=np.sum(result >= lastit)
+                if number == 0 or number == n:
+                    number = n / 2
+                #number=n/2
                 for i in range(len(f_values)):
                     f_values[i] *= -1
                     f_values[i] += n + 1
@@ -230,9 +234,9 @@ if __name__ == "__main__":
                 count=0
                 fsum=0
                 for value in f_values:
-                    fsum+=max(0.0,math.log(n/2+1)-math.log(value))
+                    fsum+=max(0.0,math.log(number+1)-math.log(value))
                 for value in f_values:
-                    f_rank_values[count]=(max(0.0,math.log(n/2+1)-math.log(value))/fsum)-1/n
+                    f_rank_values[count]=(max(0.0,math.log(number+1)-math.log(value))/fsum)-1/n
                     count+=1
 
                 #Estimates the gradiant from the fitness values and the mutations, and applies it to take one step
